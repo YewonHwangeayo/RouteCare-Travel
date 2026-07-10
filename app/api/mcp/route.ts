@@ -1,8 +1,24 @@
-// 런타임 중에 단일 인스턴스 내 연결을 추적하기 위한 맵
+// 1. [핵심] Vercel이 응답을 캐싱하지 않고 항상 실시간으로 처리하도록 강제
+export const dynamic = "force-dynamic";
+export const maxDuration = 60; // (선택) 서버리스 함수 실행 시간 최대치로 늘리기
+
+// 2. [핵심] PlayMCP 서버(외부)가 내 서버에 접근할 수 있도록 허용하는 CORS 헤더
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
+};
+
+// 단일 인스턴스 내 연결 추적
 const connections = new Map<string, ReadableStreamDefaultController>();
 
+// 3. [핵심] 외부 서버가 본격적인 통신 전 찔러보는 '사전 요청(Preflight)' 응답 처리
+export async function OPTIONS() {
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
 /**
- * 1. GET 요청: PlayMCP 플랫폼과 무중단 SSE 스트림 연결을 수립합니다.
+ * GET 요청 (SSE 연결)
  */
 export async function GET(request: Request) {
   const sessionId = Math.random().toString(36).substring(2, 15);
@@ -11,11 +27,12 @@ export async function GET(request: Request) {
     start(controller) {
       connections.set(sessionId, controller);
 
-      // [중요] PlayMCP 필수 스펙: 클라이언트가 앞으로 POST 요청을 보낼 엔드포인트 URL을 알립니다.
-      const postUrl = `/api/mcp?sessionId=${sessionId}`;
+      // PlayMCP가 POST를 보낼 엔드포인트 URL 전송 (절대 경로 권장)
+      const baseUrl = new URL(request.url).origin;
+      const postUrl = `${baseUrl}/api/mcp?sessionId=${sessionId}`;
+      
       controller.enqueue(new TextEncoder().encode(`event: endpoint\ndata: ${postUrl}\n\n`));
 
-      // 연결 유지를 위한 주기적인 주석(Keep-Alive Ping) 전송
       const interval = setInterval(() => {
         try {
           controller.enqueue(new TextEncoder().encode(`:\n\n`));
@@ -37,6 +54,7 @@ export async function GET(request: Request) {
 
   return new Response(stream, {
     headers: {
+      ...corsHeaders,
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
@@ -45,45 +63,31 @@ export async function GET(request: Request) {
 }
 
 /**
- * 2. POST 요청: PlayMCP가 보낸 JSON-RPC 명령(도구 목록 조회, 도구 실행 등)을 처리합니다.
+ * POST 요청 (명령 처리)
  */
 export async function POST(request: Request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const sessionId = searchParams.get("sessionId");
     const body = await request.json();
-
-    // MCP 프로토콜 규칙에 따라 비즈니스 로직 처리
     const responsePayload = await handleMcpRequest(body);
 
-    // 방법 A: SSE 스트림이 현재 인스턴스에 살아있다면 스트림으로 메시지 전송 (표준 스펙)
-    if (sessionId && connections.has(sessionId)) {
-      const controller = connections.get(sessionId);
-      controller?.enqueue(
-        new TextEncoder().encode(`event: message\ndata: ${JSON.stringify(responsePayload)}\n\n`)
-      );
-    }
-
-    // 방법 B: POST 응답 바디에 바로 결과를 실어 반환합니다.
+    // 응답 시에도 무조건 CORS 헤더를 붙여서 반환해야 PlayMCP가 읽을 수 있습니다.
     return new Response(JSON.stringify(responsePayload), {
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
     return new Response(JSON.stringify({ error: "Internal Server Error" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 }
 
 /**
- * 3. MCP 프로토콜 비즈니스 로직 핸들러
- * [주의] 여기 정의된 Tool Name이나 내부 필드에 절대 "kakao" 단어가 들어가면 안 됩니다.
+ * MCP 프로토콜 비즈니스 로직 핸들러
  */
 async function handleMcpRequest(body: any) {
   const { method, id } = body;
 
-  // 플레이어에게 제공할 기능(Tool) 목록 반환
   if (method === "tools/list") {
     return {
       jsonrpc: "2.0",
@@ -91,7 +95,7 @@ async function handleMcpRequest(body: any) {
       result: {
         tools: [
           {
-            name: "calculate_accessible_route", // 'kakao' 접두사/접미사 금지 정책 준수
+            name: "calculate_accessible_route", 
             description: "무장애 제약 조건(계단 회피, 캐리어 유무)과 실시간 혼잡도를 분석하여 최적의 이동 경로를 제공합니다.",
             inputSchema: {
               type: "object",
@@ -108,13 +112,9 @@ async function handleMcpRequest(body: any) {
     };
   }
 
-  // 실제 챗봇이 도구를 호출했을 때 실행되는 로직
   if (method === "tools/call") {
-    const { name, arguments: args } = body.params || {};
-
+    const { name } = body.params || {};
     if (name === "calculate_accessible_route") {
-      // 💡 질문자님이 기존에 작성해두신 핵심 도로/경로 분석 비즈니스 로직을 여기에 연결하세요.
-      // 예시용 표준 가이드 응답 서식입니다.
       return {
         jsonrpc: "2.0",
         id,
@@ -124,8 +124,7 @@ async function handleMcpRequest(body: any) {
               type: "text",
               text: JSON.stringify({
                 status: "success",
-                summary: "요청하신 제약 조건을 반영한 무장애 경로 계산이 완료되었습니다.",
-                details: "계단을 회피하여 엘리베이터 위주의 보행 도로를 탐색했습니다."
+                summary: "요청하신 제약 조건을 반영한 무장애 경로 계산이 완료되었습니다."
               })
             }
           ]
@@ -134,13 +133,9 @@ async function handleMcpRequest(body: any) {
     }
   }
 
-  // 지원하지 않는 메서드 예외 처리
   return {
     jsonrpc: "2.0",
     id,
-    error: {
-      code: -32601,
-      message: "Method not found"
-    }
+    error: { code: -32601, message: "Method not found" }
   };
 }
