@@ -1,93 +1,38 @@
-// 1. [핵심] Vercel이 응답을 캐싱하지 않고 항상 실시간으로 처리하도록 강제
-export const dynamic = "force-dynamic";
-export const maxDuration = 60; // (선택) 서버리스 함수 실행 시간 최대치로 늘리기
-
-// 2. [핵심] PlayMCP 서버(외부)가 내 서버에 접근할 수 있도록 허용하는 CORS 헤더
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-api-key",
-};
-
-// 단일 인스턴스 내 연결 추적
-const connections = new Map<string, ReadableStreamDefaultController>();
-
-// 3. [핵심] 외부 서버가 본격적인 통신 전 찔러보는 '사전 요청(Preflight)' 응답 처리
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
-}
-
-/**
- * GET 요청 (SSE 연결)
- */
-export async function GET(request: Request) {
-  const sessionId = Math.random().toString(36).substring(2, 15);
-
-  const stream = new ReadableStream({
-    start(controller) {
-      connections.set(sessionId, controller);
-
-      // PlayMCP가 POST를 보낼 엔드포인트 URL 전송 (절대 경로 권장)
-      const baseUrl = new URL(request.url).origin;
-      const postUrl = `${baseUrl}/api/mcp?sessionId=${sessionId}`;
-      
-      controller.enqueue(new TextEncoder().encode(`event: endpoint\ndata: ${postUrl}\n\n`));
-
-      const interval = setInterval(() => {
-        try {
-          controller.enqueue(new TextEncoder().encode(`:\n\n`));
-        } catch {
-          clearInterval(interval);
-          connections.delete(sessionId);
-        }
-      }, 15000);
-
-      request.signal.addEventListener("abort", () => {
-        clearInterval(interval);
-        connections.delete(sessionId);
-      });
-    },
-    cancel() {
-      connections.delete(sessionId);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      ...corsHeaders,
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-    },
-  });
-}
-
-/**
- * POST 요청 (명령 처리)
- */
-export async function POST(request: Request) {
-  try {
-    const body = await request.json();
-    const responsePayload = await handleMcpRequest(body);
-
-    // 응답 시에도 무조건 CORS 헤더를 붙여서 반환해야 PlayMCP가 읽을 수 있습니다.
-    return new Response(JSON.stringify(responsePayload), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: "Internal Server Error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-}
-
 /**
  * MCP 프로토콜 비즈니스 로직 핸들러
  */
 async function handleMcpRequest(body: any) {
   const { method, id } = body;
 
+  // 1. [핵심] MCP 초기화 요청 대응 (PlayMCP 필수 버전 규격 포함)
+  if (method === "initialize") {
+    return {
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: "2025-03-26", // 공모전 필수 조건 (최소 지원버전)
+        capabilities: {
+          tools: {} // 도구(Tools)를 지원한다고 명시
+        },
+        serverInfo: {
+          name: "route-care-mcp", // kakao 단어 절대 포함 금지
+          version: "1.0.0"
+        }
+      }
+    };
+  }
+
+  // 2. 초기화 완료 알림 (id가 없는 Notification 처리)
+  if (method === "notifications/initialized") {
+    return { jsonrpc: "2.0" }; // 에러 없이 200 상태코드만 반환
+  }
+
+  // 3. 서버 생존 확인 (Ping)
+  if (method === "ping") {
+    return { jsonrpc: "2.0", id, result: {} };
+  }
+
+  // 4. 도구 목록 조회 (기존 작성 코드)
   if (method === "tools/list") {
     return {
       jsonrpc: "2.0",
@@ -112,6 +57,7 @@ async function handleMcpRequest(body: any) {
     };
   }
 
+  // 5. 도구 실행 (기존 작성 코드)
   if (method === "tools/call") {
     const { name } = body.params || {};
     if (name === "calculate_accessible_route") {
@@ -133,6 +79,7 @@ async function handleMcpRequest(body: any) {
     }
   }
 
+  // 위 조건에 해당하지 않는 알 수 없는 명령일 경우 예외 처리
   return {
     jsonrpc: "2.0",
     id,
