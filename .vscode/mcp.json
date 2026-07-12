@@ -1,0 +1,9 @@
+{
+	"servers": {
+		"travelroute-mcp-server": {
+			"url": "https://travelroute-mcp-server.playmcp-endpoint.kakaocloud.io/mcp",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}
