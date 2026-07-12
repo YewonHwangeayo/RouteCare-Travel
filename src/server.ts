@@ -48,7 +48,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // 2. GET 요청 (SSE 연결)
-app.get('/api/mcp', (req: Request, res: Response) => {
+app.get('/mcp', (req: Request, res: Response) => {
   const sessionId = Math.random().toString(36).substring(2, 15);
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -56,7 +56,7 @@ app.get('/api/mcp', (req: Request, res: Response) => {
   res.setHeader("Connection", "keep-alive");
 
   const host = req.headers.host;
-  const postUrl = `http://${host}/api/mcp?sessionId=${sessionId}`;
+  const postUrl = `https://${host}/mcp?sessionId=${sessionId}`;
 
   res.write(`event: endpoint\ndata: ${postUrl}\n\n`);
 
@@ -71,7 +71,7 @@ app.get('/api/mcp', (req: Request, res: Response) => {
 });
 
 // 3. POST 요청 (MCP 명령 처리)
-app.post('/api/mcp', async (req: Request, res: Response) => {
+app.post('/mcp', async (req: Request, res: Response) => {
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     const { method, id } = body;
