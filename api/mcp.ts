@@ -68,7 +68,7 @@ export default async function handler(req: any, res: any) {
             tools: [
               {
                 name: "calculate_accessible_route", 
-                description: "무장애 제약 조건(계단 회피, 캐리어 유무)과 실시간 혼잡도를 분석하여 최적의 이동 경로를 제공합니다.",
+                description: "Calculates the optimal accessible travel route based on mobility constraints (e.g., wheelchair, luggage) and real-time crowd data using RouteCareTravel(루트케어트래블).",
                 inputSchema: {
                   type: "object",
                   properties: {
@@ -77,6 +77,14 @@ export default async function handler(req: any, res: any) {
                     constraints: { type: "object", description: "교통약자 제약 조건" }
                   },
                   required: ["origin", "stops"]
+                },
+                // 4. annotations: 공모전 필수 포함 항목 5가지 완벽 대응
+                annotations: {
+                  title: "Calculate Accessible Route", // 툴의 사람이 읽기 쉬운 제목
+                  readOnlyHint: true,      // 데이터 조회 목적이므로 true (상태 변경 없음)
+                  destructiveHint: false,  // 데이터 삭제 등 파괴적 행위가 없으므로 false
+                  openWorldHint: false,    // 외부 API/웹 검색을 통한 열린 응답이 아니므로 false
+                  idempotentHint: true     // 동일한 요청을 여러 번 보내도 결과가 같으므로(멱등성) true
                 }
               }
             ]
