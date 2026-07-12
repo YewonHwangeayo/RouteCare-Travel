@@ -1,8 +1,35 @@
 import express, { Request, Response, NextFunction } from 'express';
 
 const app = express();
-// Dockerfile에서 ENV PORT=8080을 선언했으므로 이를 그대로 받아서 사용합니다.
 const PORT = process.env.PORT || 8080;
+
+interface AnalyzePlaceRiskArgs {
+  location: string;
+}
+
+interface PlanTripRouteArgs {
+  destination: string;
+  days: number;
+}
+
+async function analyzePlaceRisk(location: string) {
+  return {
+    location,
+    risk: 'moderate',
+    advice: `현재 ${location}에 대한 기본 위험 분석을 완료했습니다. 자세한 정보는 추후 실제 로직으로 대체하세요.`
+  };
+}
+
+async function planTripRoute(destination: string, days: number) {
+  return {
+    destination,
+    days,
+    itinerary: Array.from({ length: days }, (_, index) => ({
+      day: index + 1,
+      plan: `Day ${index + 1} 일정 생성: ${destination} 주변 명소 탐방`
+    }))
+  };
+}
 
 app.use(express.json());
 app.use(express.text());
@@ -64,9 +91,11 @@ app.post('/api/mcp', async (req: Request, res: Response) => {
     else if (method === "notifications/initialized") {
       responsePayload = { jsonrpc: "2.0" };
     } 
+    // ... (이전 코드 유지) ...
     else if (method === "ping") {
       responsePayload = { jsonrpc: "2.0", id, result: {} };
     } 
+    // 2단계: 클라이언트에게 제공할 실제 도구 목록을 명시합니다.
     else if (method === "tools/list") {
       responsePayload = {
         jsonrpc: "2.0",
@@ -74,23 +103,26 @@ app.post('/api/mcp', async (req: Request, res: Response) => {
         result: {
           tools: [
             {
-              name: "calculate_accessible_route", 
-              description: "Calculates the optimal accessible travel route based on mobility constraints (e.g., wheelchair, luggage) and real-time crowd data using RouteCareTravel(루트케어트래블).",
+              name: "analyzePlaceRisk",
+              description: "특정 여행지의 치안, 날씨 등 위험도를 분석합니다.",
               inputSchema: {
                 type: "object",
                 properties: {
-                  origin: { type: "object", description: "Departure location address and category" },
-                  stops: { type: "array", description: "List of stopover locations to visit" },
-                  constraints: { type: "object", description: "교통약자 제약 조건" }
+                  location: { type: "string", description: "분석할 여행지 이름 (예: Shanghai)" }
                 },
-                required: ["origin", "stops"]
-              },
-              annotations: {
-                title: "Calculate Accessible Route",
-                readOnlyHint: true,
-                destructiveHint: false,
-                openWorldHint: false,
-                idempotentHint: true
+                required: ["location"]
+              }
+            },
+            {
+              name: "planTripRoute",
+              description: "최적의 여행 경로를 계획합니다.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  destination: { type: "string", description: "목적지" },
+                  days: { type: "number", description: "여행 일수" }
+                },
+                required: ["destination", "days"]
               }
             }
           ]
@@ -98,14 +130,44 @@ app.post('/api/mcp', async (req: Request, res: Response) => {
       };
     } 
     else if (method === "tools/call") {
-      // 💡 실제 경로 계산 비즈니스 로직 삽입
-      responsePayload = {
-        jsonrpc: "2.0",
-        id,
-        result: {
-          content: [{ type: "text", text: JSON.stringify({ status: "success", summary: "무장애 경로 계산이 완료되었습니다." }) }]
+      // 클라이언트가 보낸 파라미터 추출
+      const { name, arguments: args } = body.params || {};
+
+      try {
+        let toolResultData;
+
+        // 이름에 따라 분기 처리
+        if (name === "analyzePlaceRisk") {
+          toolResultData = await analyzePlaceRisk(args.location);
+        } 
+        else if (name === "planTripRoute") {
+          toolResultData = await planTripRoute(args.destination, args.days);
+        } 
+        else {
+          throw new Error(`알 수 없는 도구입니다: ${name}`);
         }
-      };
+
+        // 실행 결과를 JSON 문자열로 변환하여 응답
+        responsePayload = {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [
+              { 
+                type: "text", 
+                text: JSON.stringify(toolResultData, null, 2) 
+              }
+            ]
+          }
+        };
+      } catch (error) {
+        // 함수 실행 중 에러가 발생한 경우 처리
+        responsePayload = { 
+          jsonrpc: "2.0", 
+          id, 
+          error: { code: -32603, message: String(error) } 
+        };
+      }
     } 
     else {
       responsePayload = { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } };
