@@ -1,9 +1,15 @@
 {
-	"servers": {
-		"travelroute-mcp-server": {
-			"url": "https://travelroute-mcp-server.playmcp-endpoint.kakaocloud.io/mcp",
-			"type": "http"
-		}
-	},
-	"inputs": []
+  "mcpServers": {
+    "travelroute-mcp-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/sse-client",
+        "https://travelroute-mcp-server.playmcp-endpoint.kakaocloud.io/mcp"
+      ],
+      "env": {
+        "TIMEOUT": "10000"
+      }
+    }
+  }
 }
